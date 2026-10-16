@@ -68,9 +68,9 @@ int main(int argc, char* argv[])
 	int c, vr = 0, svr = 0, ret = 0;
 	char *str, *fname = NULL, op = 0;
 	unsigned char *buf;
-	int long long len = 0, addr = 0, flen = 0, wlen = 0;
+	int long long len = 0, addr = 0, flen = 0, wlen = 0, fsz = 0;
 	char *programmer = CH341A_I2C_DEVICE;
-	char options[128];
+	char options[128] = "";
 
 	FILE *fp;
 	title();
@@ -137,6 +137,9 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	if (op == 0 && strstr(options, "query"))
+		op = 'q';
+
 	if (op == 0) usage();
 
 	if (op == 'x' || (ECC_ignore && !ECC_fcheck) || (ECC_ignore && Skip_BAD_page) || (op == 'w' && ECC_ignore)) {
@@ -158,10 +161,13 @@ int main(int argc, char* argv[])
 		return -1;
 	}
 
+	if (op == 'q')
+		goto okout;
+
 	if((flen = flash_cmd_init(&prog)) <= 0)
 		goto out;
 
-	if (op == 'i') goto out;
+	if (op == 'i') goto okout;
 
 	if (OOB_size) {
 		if (ECC_fcheck == 1) {
@@ -181,11 +187,13 @@ int main(int argc, char* argv[])
 	}
 	if (op == 'e') {
 		printf("ERASE:\n");
-		if(addr && !len)
-			len = flen - addr;
-		else if(!addr && !len) {
-			len = flen;
-			printf("Set full erase chip!\n");
+		if(!len) {
+			printf("Refusing to erase without -l. Give the length explicitly (whole chip: -l 0x%llX).\n", flen);
+			goto out;
+		}
+		if(addr + len > flen) {
+			printf("Error: addr 0x%llX + len 0x%llX is past the end of the flash 0x%llX\n", addr, len, flen);
+			goto out;
 		}
 		if(len % bsize) {
 			printf("Please set len = 0x%016llX multiple of the block size 0x%08X\n", len, bsize);
@@ -203,7 +211,27 @@ int main(int argc, char* argv[])
 	}
 
 	if ((op == 'r') || (op == 'w')) {
-		if(addr && !len)
+		if (op == 'w') {
+			fp = fopen(fname, "rb");
+			if (!fp) {
+				printf("Couldn't open file %s for reading.\n", fname);
+				goto out;
+			}
+			fseek(fp, 0, SEEK_END);
+			fsz = ftell(fp);
+			fclose(fp);
+			if (!len)
+				len = fsz;
+			else if (len > fsz) {
+				printf("Error: file %s is 0x%llX bytes, shorter than len 0x%llX\n", fname, fsz, len);
+				goto out;
+			}
+			if (addr + len > flen) {
+				printf("Error: addr 0x%llX + len 0x%llX is past the end of the flash 0x%llX\n", addr, len, flen);
+				goto out;
+			}
+		}
+		else if(addr && !len)
 			len = flen - addr;
 		else if(!addr && !len) {
 			len = flen;
@@ -243,11 +271,14 @@ int main(int argc, char* argv[])
 				printf("VERIFY:\n");
 				goto very;
 			}
+			fclose(fp);
+			free(buf);
+			goto okout;
 		}
-		else
-			printf("Status: BAD(%d)\n", ret);
+		printf("Status: BAD(%d)\n", ret);
 		fclose(fp);
 		free(buf);
+		goto out;
 	}
 
 very:
@@ -262,26 +293,26 @@ very:
 			goto out;
 		}
 		if (svr) {
-			unsigned char ch1, ch2;
-			int i = 0;
+			unsigned char *fbuf = (unsigned char *)malloc(len + 1);
+			int long long i = 0;
+			int same = 0;
 
-			fseek(fp, 0, SEEK_SET);
-			ch1 = (unsigned char)getc(fp);
-
-			while ((ch1 != EOF) && (i < len - 1) && (ch1 == buf[i++]))
-				ch1 = (unsigned char)getc(fp);
-
-			fseek(fp, wlen - 1, SEEK_SET);
-			ch2 = (unsigned char)getc(fp);
-
-			if (ch1 == buf[i] || ch2 == buf[wlen - 1]) {
+			if (fbuf) {
+				fseek(fp, 0, SEEK_SET);
+				if (fread(fbuf, 1, len, fp) == (size_t)len) {
+					while (i < len && fbuf[i] == buf[i])
+						i++;
+					same = (i == len);
+				}
+				free(fbuf);
+			}
+			if (same) {
 				printf("Status: OK\n");
 				fclose(fp);
 				free(buf);
 				goto okout;
 			}
-			else
-				printf("Status: BAD\n");
+			printf("Status: BAD (first mismatch at offset 0x%llX)\n", i);
 			fclose(fp);
 			free(buf);
 			goto out;

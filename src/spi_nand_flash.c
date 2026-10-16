@@ -2921,6 +2921,7 @@ static SPI_NAND_FLASH_RTN_T spi_nand_erase_internal( u32 addr, u32 len )
 			{
 				_SPI_NAND_PRINTF("spi_nand_erase_internal : Erase Fail at addr = 0x%x, len = 0x%x, block_idx = 0x%x\n", addr, len, block_index);
 				rtn_status = SPI_NAND_FLASH_RTN_ERASE_FAIL;
+				break;
 			}
 
 			/* 2.7 Erase next block if needed */
@@ -3201,7 +3202,7 @@ static SPI_NAND_FLASH_RTN_T spi_nand_write_internal( u32 dst_addr, u32 len, u32 
 		/* 8. Write remain data if neccessary */
 		write_addr += data_len;
 		remain_len -= data_len;
-		ptr_rtn_len += data_len;
+		*ptr_rtn_len += data_len;
 		if( timer_progress() )
 		{
 			printf("\bWritten %d%% [%u] of [%u] bytes      ", 100 * ((len - remain_len) / 1024) / (len / 1024), len - remain_len, len);

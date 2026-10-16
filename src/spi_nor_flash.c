@@ -920,7 +920,7 @@ static int snor_read_internal(unsigned char *buf, unsigned long from, unsigned l
 int snor_read(unsigned char *buf, unsigned long from, unsigned long len)
 {
 	u32 size, pos;
-	int ret;
+	int ret = 0;
 
 	if (strcmp(spi_controller->name, CH341A_SPI_DEVICE) == 0) {
 		return snor_read_internal(buf, from, len, true);
