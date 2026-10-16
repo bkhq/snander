@@ -39,7 +39,8 @@
 #endif
 
 #define CH341A_PACKET_READ 30
-#define CH341A_PACKET_WRITE 26
+/* data bytes per I2C write packet; the MSTAR_WRITE command byte is added on top, 25 + 1 = 26 is the most ch341a_i2c_write() can take */
+#define CH341A_PACKET_WRITE 25
 #define CH341A_I2C_DEVICE "mstar"
 #define CH341A_SPI_DEVICE "ch341a"
 

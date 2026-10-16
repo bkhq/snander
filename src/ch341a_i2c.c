@@ -25,6 +25,10 @@
 
 static struct libusb_device_handle *handle = NULL;
 
+#define I2C_BUF_SIZE 32
+#define I2C_READ_MAX (I2C_BUF_SIZE - 1)	/* one status byte comes first */
+#define I2C_WRITE_MAX (I2C_BUF_SIZE - 6)	/* stream header (4) and trailer (2) */
+
 static int ch341a_i2c_transfer(uint8_t type, uint8_t *buf, int len) {
 	int size = 0;
 
@@ -35,13 +39,23 @@ static int ch341a_i2c_transfer(uint8_t type, uint8_t *buf, int len) {
 		return -1;
 	}
 
+	if (size != len) {
+		printf("Short %s: %d of %d bytes\n", (type == USB_EP_READ) ?
+			"read" : "write", size, len);
+		return -1;
+	}
+
 	return size;
 }
 
 static int ch341a_i2c_read(uint8_t *data, uint32_t len, uint32_t addr) {
-	uint8_t buf[32];
+	uint8_t buf[I2C_BUF_SIZE];
 	uint8_t sz = 0;
 	int ret = 0;
+
+	if (len > I2C_READ_MAX) {
+		return -1;
+	}
 
 	buf[sz++] = CH341A_CMD_I2C_STREAM;
 	buf[sz++] = CH341A_CMD_I2C_STM_STA;
@@ -73,15 +87,21 @@ static int ch341a_i2c_read(uint8_t *data, uint32_t len, uint32_t addr) {
 		return -1;
 	}
 
-	memcpy(data, buf + 1, len);
+	if (len) {
+		memcpy(data, buf + 1, len);
+	}
 
 	return 0;
 }
 
 static int ch341a_i2c_write(uint8_t *data, uint32_t len, uint32_t addr) {
-	uint8_t buf[32];
+	uint8_t buf[I2C_BUF_SIZE];
 	uint8_t sz = 0;
 	int ret = 0;
+
+	if (len > I2C_WRITE_MAX) {
+		return -1;
+	}
 
 	buf[sz++] = CH341A_CMD_I2C_STREAM;
 	buf[sz++] = CH341A_CMD_I2C_STM_STA;
@@ -103,6 +123,10 @@ static int ch341a_i2c_write(uint8_t *data, uint32_t len, uint32_t addr) {
 
 static int ch341a_i2c_send_command(uint32_t writecnt, uint32_t readcnt,
 		const uint8_t *writearr, uint8_t *readarr) {
+	if (readcnt > I2C_READ_MAX || writecnt > I2C_WRITE_MAX - 1) {
+		return -1;
+	}
+
 	if (readcnt) {
 		uint8_t cmd = MSTAR_READ;
 		if (ch341a_i2c_write(&cmd, 1, MSTAR_PORT) < 0) {
@@ -115,7 +139,7 @@ static int ch341a_i2c_send_command(uint32_t writecnt, uint32_t readcnt,
 	}
 
 	if (writecnt) {
-		uint8_t buffer[32];
+		uint8_t buffer[I2C_BUF_SIZE];
 		buffer[0] = MSTAR_WRITE;
 		memcpy(buffer + 1, writearr, writecnt);
 		if (ch341a_i2c_write(buffer, writecnt + 1, MSTAR_PORT) < 0) {
@@ -205,6 +229,7 @@ static int ch341a_i2c_init(const char *options) {
 	handle = libusb_open_device_with_vid_pid(NULL, CH341A_USB_VID, CH341A_USB_PID);
 	if (handle == NULL) {
 		printf("Error opening usb device [%X:%X]\n", CH341A_USB_VID, CH341A_USB_PID);
+		libusb_exit(NULL);
 		return -1;
 	}
 
@@ -212,9 +237,10 @@ static int ch341a_i2c_init(const char *options) {
 
 #ifdef __gnu_linux__
 	if (libusb_kernel_driver_active(handle, 0)) {
-		if (libusb_detach_kernel_driver(handle, 0)) {
+		ret = libusb_detach_kernel_driver(handle, 0);
+		if (ret) {
 			printf("Failed to detach kernel driver: %s\n", libusb_error_name(ret));
-			return -1;
+			goto close_handle;
 		}
 	}
 #endif
@@ -230,7 +256,7 @@ static int ch341a_i2c_init(const char *options) {
 
 	uint8_t buf[] = {
 		CH341A_CMD_I2C_STREAM,
-		CH341A_CMD_I2C_STM_SET | speed ? 2 : 1,
+		CH341A_CMD_I2C_STM_SET | (speed ? 2 : 1),
 		CH341A_CMD_I2C_STM_END
 	};
 
@@ -257,9 +283,8 @@ static int ch341a_i2c_init(const char *options) {
 
 	uint8_t cmd[] = {'M', 'S', 'T', 'A', 'R'};
 	if (ch341a_i2c_write(cmd, 5, MSTAR_PORT) < 0) {
-		if (ch341a_i2c_release(false) < 0) {
-			goto close_handle;
-		}
+		printf("Failed to enter ISP mode\n");
+		goto close_handle;
 	}
 
 	return 0;
