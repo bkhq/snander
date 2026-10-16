@@ -32,7 +32,7 @@ struct flash_cmd prog;
 extern unsigned int bsize;
 const struct spi_controller *spi_controller;
 
-#define _VER "1.8.0"
+#define _VER "1.8.1"
 
 void title(void)
 {
@@ -45,20 +45,20 @@ void usage(void)
 		"  Usage:\n"\
 		" -h             display this message\n"\
 		" -p <name>      select programmer device (mstar, ch341a)\n"\
-		" -s             enable i2c fast speed mode (for mstar programmer)\n"\
-		" -q             query connected i2c devices (for mstar programmer)\n"\
+		" -s             enable i2c fast speed mode, 400 kHz instead of 100 kHz (for mstar programmer)\n"\
+		" -q             query connected i2c devices, can be used on its own (for mstar programmer)\n"\
 		" -d             disable internal ECC (use read and write page size + OOB size)\n"\
 		" -o <bytes>     manual set OOB size with disable internal ECC (default 0)\n"\
 		" -I             ECC ignore errors (for read test only)\n"\
 		" -k             Skip BAD pages, try read or write in to next page\n"\
 		" -L             print list support chips\n"\
 		" -i             read the chip ID info\n"\
-		" -e             erase chip (full or use with -a [-l])\n"\
-		" -l <bytes>     manually set length\n"\
+		" -e             erase, needs -l (whole chip: -l <flash size>); use with -a [-l]\n"\
+		" -l <bytes>     set length (-w defaults to the file size, -r to the end of the flash)\n"\
 		" -a <address>   manually set address\n"\
 		" -w <filename>  write chip with data from filename\n"\
 		" -r <filename>  read chip and save data to filename\n"\
-		" -v             verify after write on chip\n";
+		" -v             verify after write on chip (compares every byte)\n";
 	printf(use);
 	exit(0);
 }

@@ -1,6 +1,6 @@
 TARGET ?= snander
 CFLAGS ?= -Wall -s
-LDFLAGS ?= -I /usr/include/libusb-1.0 -lusb-1.0
+LDFLAGS ?= $(shell pkg-config --cflags --libs libusb-1.0 2>/dev/null || echo -I/usr/include/libusb-1.0 -lusb-1.0)
 
 FILES += src/main.o src/flashcmd_api.o src/timer.o \
 	src/spi_controller.o src/spi_nand_flash.o src/spi_nor_flash.o \
