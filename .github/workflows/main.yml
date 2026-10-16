@@ -1,46 +1,106 @@
 name: build
+
 on:
   push:
-    branches:
-      - master
+    branches: [main]
+    tags: ['v*']
+  pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  LIBUSB_VERSION: 1.0.29
+  LIBUSB_SHA256: 5977fc950f8d1395ccea9bd48c06b3f808fd3c2c961b44b0c2e6e29fc3a70a85
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64,   os: ubuntu-22.04 }
+          - { name: linux-arm64, os: ubuntu-22.04-arm }
+          - { name: macos-x64,   os: macos-15-intel }
+          - { name: macos-arm64, os: macos-15 }
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Linux
+      - name: Build (Linux, static)
+        if: runner.os == 'Linux'
         run: |
-          HOST=x86_64-linux-musl
-          sudo apt-get update
-          sudo apt-get install musl-dev
-          sudo ln -s /usr/include/linux /usr/include/x86_64-linux-musl
-          sudo ln -s /usr/include/asm-generic /usr/include/x86_64-linux-musl
-          sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/x86_64-linux-musl
-          git clone https://github.com/libusb/libusb --depth=1
-          bash -c "cd libusb; ./autogen.sh --host=$HOST --disable-udev --libdir=$PWD/linux; make -j8 install-exec"
-          make CC=$HOST-gcc CFLAGS="-static -s" LDFLAGS="-I libusb/libusb -L linux -lusb-1.0"
-          rm -rf libusb
-          zip -r snander-linux.zip snander
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential
+          curl -fsSL -o libusb.tar.bz2 "https://github.com/libusb/libusb/releases/download/v${LIBUSB_VERSION}/libusb-${LIBUSB_VERSION}.tar.bz2"
+          echo "${LIBUSB_SHA256}  libusb.tar.bz2" | sha256sum -c -
+          tar xf libusb.tar.bz2
+          (cd "libusb-${LIBUSB_VERSION}" && ./configure --enable-static --disable-shared --disable-udev --prefix="$PWD/../usb" > /dev/null && make -j"$(nproc)" install > /dev/null)
+          make CFLAGS="-O2 -Wall -static" LDFLAGS="-I$PWD/usb/include/libusb-1.0 $PWD/usb/lib/libusb-1.0.a -lpthread"
+          strip snander
 
-      - name: Windows
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: |
-          HOST=x86_64-w64-mingw32
-          sudo apt-get update
-          sudo apt-get install mingw-w64
-          git clone https://github.com/libusb/libusb --depth=1
-          bash -c "cd libusb; ./autogen.sh --host=$HOST --libdir=$PWD/windows; make -j8 install-exec"
-          make CC=$HOST-gcc CFLAGS="-static -s" LDFLAGS="-I libusb/libusb -L windows -lusb-1.0"
-          rm -rf libusb
-          zip -r snander-windows.zip driver snander.exe
+          brew install libusb
+          LU="$(brew --prefix libusb)"
+          make CFLAGS="-O2 -Wall" LDFLAGS="-I$LU/include/libusb-1.0 $LU/lib/libusb-1.0.a -framework IOKit -framework CoreFoundation -framework Security"
+          strip -x snander
 
-      - name: Upload
-        uses: softprops/action-gh-release@v2
+      - name: Smoke test
+        run: |
+          file snander
+          if [ "$RUNNER_OS" = "Linux" ]; then ldd snander || true; else otool -L snander; fi
+          ./snander -h | head -n 3
+          ./snander -L | grep -q "GD5F1GM7UE"
+          ./snander -q 2>&1 | head -n 3 || true
+
+      - name: Package
+        run: |
+          VER="${GITHUB_REF_NAME}"
+          case "$GITHUB_REF" in refs/tags/*) ;; *) VER="${GITHUB_SHA::7}" ;; esac
+          NAME="snander-${VER}-${{ matrix.name }}"
+          mkdir "$NAME"
+          cp snander readme.txt "$NAME/"
+          tar czf "$NAME.tar.gz" "$NAME"
+
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: latest
-          files: |
-            snander-linux.zip
-            snander-windows.zip
+          name: snander-${{ matrix.name }}
+          path: snander-*.tar.gz
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum snander-*.tar.gz > SHA256SUMS
+          cat > ../notes.md <<'NOTES'
+          Builds for Linux and macOS, x64 and arm64. Linux binaries are static; macOS binaries link libusb statically and are not signed (clear the download quarantine flag with `xattr -d com.apple.quarantine snander`).
+
+          Changes compared to upstream openipc/snander-mstar 1.8.0:
+
+          - Add GigaDevice GD5F1GM7UE (ID 0x91) SPI NAND.
+          - Fix a stack overflow in the I2C write path that aborted every NAND page program when stack protection is enabled.
+          - Fix the I2C speed command: `-s` now selects 400 kHz, the default is 100 kHz.
+          - `-w` defaults to the file size, `-e` requires `-l`, ranges past the end of the flash are refused.
+          - `-v` compares every byte and reports the first mismatch.
+          - Stop erasing at the first failed block, report short USB transfers, and use proper exit codes.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "snander $GITHUB_REF_NAME" --notes-file ../notes.md snander-*.tar.gz SHA256SUMS
